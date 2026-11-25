@@ -1,0 +1,153 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
+             data.opticMode is string && data.opticMode.size() >= 1 && data.opticMode.size() <= 40;
+    }
+
+    function isValidBookmark(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.targetType is string && data.targetType.size() >= 1 && data.targetType.size() <= 32 &&
+             data.targetKey is string && data.targetKey.size() >= 1 && data.targetKey.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+             data.subtitle is string && data.subtitle.size() <= 240 &&
+             data.lat is number && data.lat >= -90 && data.lat <= 90 &&
+             data.lon is number && data.lon >= -180 && data.lon <= 180;
+    }
+
+    function isValidDonation(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.paybill == '522522' &&
+             data.accountNumber == '1355643775' &&
+             data.amountKes is int && data.amountKes >= 10 && data.amountKes <= 500000 &&
+             data.donorPhone is string && data.donorPhone.size() <= 24 &&
+             data.referenceCode is string && data.referenceCode.size() <= 64 &&
+             data.status in ['RECORDED', 'CONFIRMED'];
+    }
+
+    function isValidIntelMessage(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.role in ['user', 'model'] &&
+             data.content is string && data.content.size() >= 1 && data.content.size() <= 16000 &&
+             data.modelId is string && data.modelId.size() >= 1 && data.modelId.size() <= 64 &&
+             data.targetLat is number && data.targetLat >= -90 && data.targetLat <= 90 &&
+             data.targetLon is number && data.targetLon >= -180 && data.targetLon <= 180;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+
+      allow create: if isValidId(userId) &&
+                       isOwner(userId) &&
+                       incoming().userId == userId &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'opticMode', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'opticMode', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isValidId(userId) &&
+                       isOwner(userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'opticMode', 'updatedAt']);
+
+      allow delete: if false;
+
+      match /bookmarks/{bookmarkId} {
+        allow get, list: if isOwner(userId);
+
+        allow create: if isValidId(bookmarkId) &&
+                         isOwner(userId) &&
+                         incoming().userId == userId &&
+                         incoming().keys().hasAll(['userId', 'targetType', 'targetKey', 'title', 'subtitle', 'lat', 'lon', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'targetType', 'targetKey', 'title', 'subtitle', 'lat', 'lon', 'createdAt', 'updatedAt']) &&
+                         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidBookmark(incoming());
+
+        allow update: if isValidId(bookmarkId) &&
+                         isOwner(userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidBookmark(incoming()) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'subtitle', 'lat', 'lon', 'updatedAt']);
+
+        allow delete: if isValidId(bookmarkId) && isOwner(userId);
+      }
+
+      match /donations/{donationId} {
+        allow get, list: if isOwner(userId);
+
+        allow create: if isValidId(donationId) &&
+                         isOwner(userId) &&
+                         incoming().userId == userId &&
+                         incoming().keys().hasAll(['userId', 'paybill', 'accountNumber', 'amountKes', 'donorPhone', 'referenceCode', 'status', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'paybill', 'accountNumber', 'amountKes', 'donorPhone', 'referenceCode', 'status', 'createdAt', 'updatedAt']) &&
+                         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidDonation(incoming());
+
+        allow update: if isValidId(donationId) &&
+                         isOwner(userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().paybill == existing().paybill &&
+                         incoming().accountNumber == existing().accountNumber &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidDonation(incoming()) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['referenceCode', 'status', 'updatedAt']);
+
+        allow delete: if isValidId(donationId) && isOwner(userId);
+      }
+
+      match /intel_messages/{messageId} {
+        allow get, list: if isOwner(userId);
+
+        allow create: if isValidId(messageId) &&
+                         isOwner(userId) &&
+                         incoming().userId == userId &&
+                         incoming().keys().hasAll(['userId', 'role', 'content', 'modelId', 'targetLat', 'targetLon', 'createdAt']) &&
+                         incoming().keys().hasOnly(['userId', 'role', 'content', 'modelId', 'targetLat', 'targetLon', 'createdAt']) &&
+                         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                         isValidIntelMessage(incoming());
+
+        allow update: if false;
+        allow delete: if isValidId(messageId) && isOwner(userId);
+      }
+    }
+  }
+}

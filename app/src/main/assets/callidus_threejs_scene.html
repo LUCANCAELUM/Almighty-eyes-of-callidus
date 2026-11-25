@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Callidus Three.js WebView Renderer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #04070D;
+      font-family: monospace;
+      color: #EAF6FF;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    #scene-container {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      background: radial-gradient(circle at 50% 45%, #0A1728 0%, #04070D 75%);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="scene-container"></div>
+
+  <script>
+    (function () {
+      const container = document.getElementById('scene-container');
+      const bridge = window.CallidusThreeBridge || null;
+
+      const sceneState = {
+        mode: 'basic',
+        wireframe: false,
+        autoRotate: true,
+        optic: 'EO_TACTICAL',
+        lat: 0,
+        lon: 0,
+        theaterName: '3D SCENE'
+      };
+
+      function reportReady(engineName, info) {
+        try {
+          if (bridge && typeof bridge.onEngineReady === 'function') {
+            bridge.onEngineReady(String(engineName), String(info || ''));
+          }
+        } catch (_) {}
+      }
+
+      function reportError(errMsg) {
+        try {
+          if (bridge && typeof bridge.onRenderError === 'function') {
+            bridge.onRenderError(String(errMsg));
+          }
+        } catch (_) {}
+      }
+
+      function reportFps(fps) {
+        try {
+          if (bridge && typeof bridge.onFpsSample === 'function') {
+            bridge.onFpsSample(Math.round(fps));
+          }
+        } catch (_) {}
+      }
+
+      function applyOpticCss(el, opticName) {
+        if (!el) return;
+        sceneState.optic = opticName || 'EO_TACTICAL';
+        if (opticName === 'FLIR_THERMAL') {
+          el.style.filter = 'sepia(1) hue-rotate(-35deg) saturate(2.4) contrast(1.22)';
+        } else if (opticName === 'NVG_PHOSPHOR') {
+          el.style.filter = 'sepia(1) hue-rotate(85deg) saturate(2.3) contrast(1.18)';
+        } else if (opticName === 'CRT_MONITOR') {
+          el.style.filter = 'contrast(1.3) saturate(1.35) brightness(1.06)';
+        } else if (opticName === 'NOIR_SURVEILLANCE') {
+          el.style.filter = 'grayscale(1) contrast(1.42) brightness(0.96)';
+        } else if (opticName === 'ARCTIC_SNOW') {
+          el.style.filter = 'brightness(1.18) saturate(0.7) hue-rotate(170deg)';
+        } else {
+          el.style.filter = 'none';
+        }
+      }
+
+      function getViewportSize() {
+        const w = container.clientWidth || window.innerWidth || 360;
+        const h = container.clientHeight || window.innerHeight || 480;
+        return { w: Math.max(1, w), h: Math.max(1, h) };
+      }
+
+      function loadScriptSequential(urls, onDone) {
+        let idx = 0;
+        function tryNext() {
+          if (typeof window.THREE !== 'undefined') {
+            onDone(true);
+            return;
+          }
+          if (idx >= urls.length) {
+            onDone(false);
+            return;
+          }
+          const url = urls[idx++];
+          const s = document.createElement('script');
+          s.src = url;
+          s.async = false;
+          const timer = setTimeout(() => {
+            if (typeof window.THREE === 'undefined') {
+              s.onload = null;
+              s.onerror = null;
+              tryNext();
+            }
+          }, 5500);
+          s.onload = () => {
+            clearTimeout(timer);
+            onDone(typeof window.THREE !== 'undefined');
+          };
+          s.onerror = () => {
+            clearTimeout(timer);
+            tryNext();
+          };
+          document.head.appendChild(s);
+        }
+        tryNext();
+      }
+
+      function createSafeWebGLRenderer(width, height) {
+        const attempts = [
+          { antialias: true, alpha: false, powerPreference: 'default' },
+          { antialias: false, alpha: false, powerPreference: 'low-power' }
+        ];
+        for (const opts of attempts) {
+          try {
+            const renderer = new THREE.WebGLRenderer(opts);
+            const gl = renderer.getContext();
+            if (!gl) {
+              renderer.dispose();
+              continue;
+            }
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+            renderer.setSize(width, height, false);
+            return renderer;
+          } catch (e) {
+            reportError(e && e.message ? e.message : 'WebGL context attempt failed');
+          }
+        }
+        return null;
+      }
+
+      function initThreeJsScene() {
+        const { w, h } = getViewportSize();
+        const renderer = createSafeWebGLRenderer(w, h);
+        if (!renderer) {
+          return false;
+        }
+
+        const gl = renderer.getContext();
+        const gpuInfo = (() => {
+          try {
+            const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+            if (dbg) return gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+            return gl.getParameter(gl.VERSION);
+          } catch (_) {
+            return 'WebGL Active';
+          }
+        })();
+
+        renderer.domElement.style.width = '100%';
+        renderer.domElement.style.height = '100%';
+        container.innerHTML = '';
+        container.appendChild(renderer.domElement);
+        applyOpticCss(renderer.domElement, sceneState.optic);
+
+        renderer.domElement.addEventListener('webglcontextlost', (e) => {
+          e.preventDefault();
+          reportError('WebGL context lost');
+        });
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x04070d);
+        scene.fog = new THREE.FogExp2(0x04070d, 0.032);
+
+        const camera = new THREE.PerspectiveCamera(48, w / h, 0.1, 160);
+
+        // Built-in spherical orbit camera rig (works with 0 external OrbitControls dependencies!)
+        let orbitAzimuth = 0.68;
+        let orbitPolar = 1.08;
+        let orbitRadius = 5.4;
+        const target = new THREE.Vector3(0, 0.35, 0);
+
+        function updateCameraPosition() {
+          const sinP = Math.sin(orbitPolar);
+          camera.position.set(
+            target.x + orbitRadius * sinP * Math.sin(orbitAzimuth),
+            target.y + orbitRadius * Math.cos(orbitPolar),
+            target.z + orbitRadius * sinP * Math.cos(orbitAzimuth)
+          );
+          camera.lookAt(target);
+        }
+        updateCameraPosition();
+
+        // Pointer drag + two-finger pinch/wheel zoom
+        const activePointers = new Map();
+        let lastPinchDist = null;
+
+        renderer.domElement.addEventListener('pointerdown', (e) => {
+          activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          lastPinchDist = null;
+        });
+        renderer.domElement.addEventListener('pointerup', (e) => {
+          activePointers.delete(e.pointerId);
+          lastPinchDist = null;
+        });
+        renderer.domElement.addEventListener('pointercancel', (e) => {
+          activePointers.delete(e.pointerId);
+          lastPinchDist = null;
+        });
+        renderer.domElement.addEventListener('pointermove', (e) => {
+          const prev = activePointers.get(e.pointerId);
+          if (!prev) return;
+          activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+          if (activePointers.size === 1) {
+            const dx = e.clientX - prev.x;
+            const dy = e.clientY - prev.y;
+            orbitAzimuth -= dx * 0.0085;
+            orbitPolar = Math.max(0.22, Math.min(Math.PI * 0.48, orbitPolar - dy * 0.0075));
+            updateCameraPosition();
+          } else if (activePointers.size >= 2) {
+            const pts = Array.from(activePointers.values());
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            if (lastPinchDist != null && dist > 10) {
+              const scale = lastPinchDist / dist;
+              orbitRadius = Math.max(2.4, Math.min(14.0, orbitRadius * scale));
+              updateCameraPosition();
+            }
+            lastPinchDist = dist;
+          }
+        });
+        renderer.domElement.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          orbitRadius = Math.max(2.4, Math.min(14.0, orbitRadius + e.deltaY * 0.004));
+          updateCameraPosition();
+        }, { passive: false });
+
+        // Lighting
+        const ambient = new THREE.AmbientLight(0x88bbee, 0.75);
+        scene.add(ambient);
+
+        const hemi = new THREE.HemisphereLight(0x4fc3f7, 0x091322, 0.9);
+        scene.add(hemi);
+
+        const keyLight = new THREE.DirectionalLight(0xfff1dc, 1.9);
+        keyLight.position.set(5, 8, 6);
+        scene.add(keyLight);
+
+        const rimLight = new THREE.PointLight(0x00e5ff, 1.6, 24);
+        rimLight.position.set(-4, 3, -4);
+        scene.add(rimLight);
+
+        // Tactical Ground Grid & Axes Reference
+        const gridHelper = new THREE.GridHelper(18, 24, 0x00e5ff, 0x102840);
+        gridHelper.position.y = -1.2;
+        scene.add(gridHelper);
+
+        // 1. Basic Starter Three.js Scene (Cube + Wireframe Icosahedron + Orbital Ring)
+        function buildBasicStarterGroup() {
+          const group = new THREE.Group();
+
+          const cubeMat = new THREE.MeshStandardMaterial({
+            color: 0x00b4d8,
+            metalness: 0.65,
+            roughness: 0.25,
+            emissive: 0x003344,
+            emissiveIntensity: 0.5
+          });
+          const cube = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.35, 1.35), cubeMat);
+          cube.position.y = 0.35;
+          group.add(cube);
+
+          const cageMat = new THREE.MeshBasicMaterial({
+            color: 0x00ff9c,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.68
+          });
+          const cage = new THREE.Mesh(new THREE.IcosahedronGeometry(1.45, 1), cageMat);
+          cage.position.y = 0.35;
+          group.add(cage);
+
+          const ringMat = new THREE.MeshBasicMaterial({ color: 0xffb300 });
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(2.05, 0.03, 12, 64), ringMat);
+          ring.position.y = 0.35;
+          ring.rotation.x = Math.PI * 0.4;
+          group.add(ring);
+
+          group.userData = { cube, cage, ring };
+          return group;
+        }
+
+        // 2. Recon Satellite Assembly
+        function buildReconSatellite() {
+          const group = new THREE.Group();
+          const titaniumMat = new THREE.MeshStandardMaterial({ color: 0xb0c4de, metalness: 0.8, roughness: 0.28 });
+          const goldMat = new THREE.MeshStandardMaterial({ color: 0xffb300, metalness: 0.88, roughness: 0.22 });
+          const solarMat = new THREE.MeshStandardMaterial({ color: 0x134b8a, metalness: 0.55, roughness: 0.25 });
+          const glowCyan = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00e5ff, emissiveIntensity: 1.2 });
+
+          const bus = new THREE.Mesh(new THREE.CylinderGeometry(0.54, 0.54, 1.2, 8), titaniumMat);
+          group.add(bus);
+
+          const foil = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.50, 0.3, 8), goldMat);
+          foil.position.y = -0.55;
+          group.add(foil);
+
+          const lens = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 12), glowCyan);
+          lens.position.y = 0.72;
+          group.add(lens);
+
+          const truss = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.8, 10), titaniumMat);
+          truss.rotation.z = Math.PI / 2;
+          group.add(truss);
+
+          for (const side of [-1, 1]) {
+            const panel = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.04, 0.88), solarMat);
+            panel.position.set(side * 1.55, 0, 0);
+            panel.rotation.x = 0.35;
+            group.add(panel);
+          }
+
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(2.35, 0.025, 10, 64), glowCyan);
+          ring.rotation.x = Math.PI * 0.44;
+          group.add(ring);
+          group.position.y = 0.45;
+          return group;
+        }
+
+        // 3. Delta-Wing Tactical Aircraft
+        function buildInterceptorJet() {
+          const group = new THREE.Group();
+          const hullMat = new THREE.MeshStandardMaterial({ color: 0x4b6384, metalness: 0.75, roughness: 0.32 });
+          const trimMat = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00a8cc, emissiveIntensity: 0.9 });
+          const canopyMat = new THREE.MeshStandardMaterial({ color: 0xffb300, metalness: 0.9, roughness: 0.14 });
+
+          const fuselage = new THREE.Mesh(new THREE.ConeGeometry(0.36, 3.1, 12), hullMat);
+          fuselage.rotation.x = Math.PI / 2;
+          fuselage.scale.set(1.2, 1.0, 0.55);
+          group.add(fuselage);
+
+          const deltaWing = new THREE.Mesh(new THREE.ConeGeometry(1.75, 2.2, 3), hullMat);
+          deltaWing.rotation.x = Math.PI / 2;
+          deltaWing.scale.set(1.15, 0.06, 1.0);
+          deltaWing.position.z = -0.35;
+          group.add(deltaWing);
+
+          const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 12), canopyMat);
+          canopy.scale.set(0.75, 0.65, 2.1);
+          canopy.position.set(0, 0.18, 0.42);
+          group.add(canopy);
+
+          for (const s of [-1, 1]) {
+            const tail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.6, 0.68), hullMat);
+            tail.position.set(s * 0.4, 0.26, -1.0);
+            tail.rotation.z = s * -0.32;
+            group.add(tail);
+
+            const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.10, 0.32, 12), trimMat);
+            nozzle.rotation.x = Math.PI / 2;
+            nozzle.position.set(s * 0.2, -0.02, -1.48);
+            group.add(nozzle);
+          }
+          group.position.y = 0.45;
+          return group;
+        }
+
+        // 4. Orbital Sphere + Viewshed Frustum
+        function buildHoloGlobe() {
+          const group = new THREE.Group();
+          const coreMat = new THREE.MeshStandardMaterial({ color: 0x0b2540, metalness: 0.45, roughness: 0.5 });
+          const wireMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, wireframe: true, transparent: true, opacity: 0.48 });
+          const coneMat = new THREE.MeshBasicMaterial({ color: 0x00ff9c, transparent: true, opacity: 0.36, side: THREE.DoubleSide });
+          const beaconMat = new THREE.MeshStandardMaterial({ color: 0x00ff9c, emissive: 0x00ff9c, emissiveIntensity: 1.4 });
+
+          group.add(new THREE.Mesh(new THREE.SphereGeometry(1.45, 28, 20), coreMat));
+          group.add(new THREE.Mesh(new THREE.SphereGeometry(1.48, 20, 14), wireMat));
+
+          const orbitPivot = new THREE.Group();
+          const cone = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.15, 16, 1, true), coneMat);
+          cone.position.y = 1.85;
+          cone.rotation.x = Math.PI;
+          orbitPivot.add(cone);
+
+          const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 12), beaconMat);
+          beacon.position.y = 2.45;
+          orbitPivot.add(beacon);
+          orbitPivot.rotation.z = 0.42;
+          group.add(orbitPivot);
+          group.userData.orbitPivot = orbitPivot;
+          group.position.y = 0.45;
+          return group;
+        }
+
+        const models = {
+          basic: buildBasicStarterGroup(),
+          sat: buildReconSatellite(),
+          jet: buildInterceptorJet(),
+          globe: buildHoloGlobe()
+        };
+        Object.values(models).forEach((m) => scene.add(m));
+
+        function applyModeVisibility() {
+          Object.entries(models).forEach(([k, m]) => {
+            m.visible = k === sceneState.mode;
+          });
+        }
+        applyModeVisibility();
+
+        function applyWireframeFlag() {
+          Object.values(models).forEach((group) => {
+            group.traverse((obj) => {
+              if (obj.isMesh && obj.material && obj.userData && !obj.userData.keepWireframe) {
+                // Keep intentional wireframe cages wireframe; toggle solid meshes
+                if (obj.geometry && obj.geometry.type !== 'IcosahedronGeometry' && obj.geometry.type !== 'SphereGeometry' || obj.material.opacity !== 0.48) {
+                  obj.material.wireframe = sceneState.wireframe;
+                }
+              }
+            });
+          });
+        }
+
+        function handleResize() {
+          const next = getViewportSize();
+          camera.aspect = next.w / next.h;
+          camera.updateProjectionMatrix();
+          renderer.setSize(next.w, next.h, false);
+        }
+
+        if (typeof ResizeObserver !== 'undefined') {
+          const ro = new ResizeObserver(handleResize);
+          ro.observe(container);
+        }
+        window.addEventListener('resize', handleResize);
+
+        window.setSceneMode = (mode) => {
+          sceneState.mode = models[mode] ? mode : 'basic';
+          applyModeVisibility();
+        };
+        window.setWireframeMode = (enabled) => {
+          sceneState.wireframe = Boolean(enabled);
+          applyWireframeFlag();
+        };
+        window.setAutoRotate = (enabled) => {
+          sceneState.autoRotate = Boolean(enabled);
+        };
+        window.resetThreeCamera = () => {
+          orbitAzimuth = 0.68;
+          orbitPolar = 1.08;
+          orbitRadius = 5.4;
+          updateCameraPosition();
+        };
+        window.setOpticMode = (opticName) => applyOpticCss(renderer.domElement, opticName);
+        window.setTheaterTarget = (lat, lon, name) => {
+          sceneState.lat = Number(lat) || 0;
+          sceneState.lon = Number(lon) || 0;
+          sceneState.theaterName = name || '3D SCENE';
+        };
+
+        let lastFrameTime = performance.now();
+        let fpsFrames = 0;
+        let fpsAccum = 0;
+
+        function animate(now) {
+          requestAnimationFrame(animate);
+          const dt = Math.min((now - lastFrameTime) / 1000, 0.05);
+          lastFrameTime = now;
+
+          fpsFrames++;
+          fpsAccum += dt;
+          if (fpsAccum >= 0.8) {
+            reportFps(fpsFrames / fpsAccum);
+            fpsFrames = 0;
+            fpsAccum = 0;
+          }
+
+          if (sceneState.autoRotate && activePointers.size === 0) {
+            if (sceneState.mode === 'basic') {
+              const { cube, cage, ring } = models.basic.userData;
+              cube.rotation.x += dt * 0.65;
+              cube.rotation.y += dt * 0.92;
+              cage.rotation.y -= dt * 0.45;
+              cage.rotation.z += dt * 0.30;
+              ring.rotation.z += dt * 0.55;
+            } else {
+              const active = models[sceneState.mode];
+              if (active) active.rotation.y += dt * 0.42;
+              if (sceneState.mode === 'globe' && models.globe.userData.orbitPivot) {
+                models.globe.userData.orbitPivot.rotation.y -= dt * 0.85;
+              }
+            }
+          }
+
+          renderer.render(scene, camera);
+        }
+        requestAnimationFrame(animate);
+
+        reportReady('THREE.JS WEBGL', gpuInfo);
+        return true;
+      }
+
+      // Self-Contained Software 3D Wireframe Canvas Fallback (if offline / WebGL blocked)
+      function initSoftware3DFallback() {
+        container.innerHTML = '';
+        const canvas = document.createElement('canvas');
+        container.appendChild(canvas);
+        applyOpticCss(canvas, sceneState.optic);
+        const ctx = canvas.getContext('2d');
+
+        let yaw = 0.55;
+        let pitch = 0.35;
+        let zoom = 1.0;
+        let dragging = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        function resize() {
+          const { w, h } = getViewportSize();
+          const dpr = window.devicePixelRatio || 1;
+          canvas.width = w * dpr;
+          canvas.height = h * dpr;
+        }
+        resize();
+        if (typeof ResizeObserver !== 'undefined') {
+          new ResizeObserver(resize).observe(container);
+        }
+        window.addEventListener('resize', resize);
+
+        canvas.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+        window.addEventListener('pointerup', () => { dragging = false; });
+        window.addEventListener('pointermove', (e) => {
+          if (!dragging) return;
+          yaw += (e.clientX - lastX) * 0.0085;
+          pitch = Math.max(-1.1, Math.min(1.1, pitch + (e.clientY - lastY) * 0.0085));
+          lastX = e.clientX; lastY = e.clientY;
+        });
+
+        window.setSceneMode = (mode) => { sceneState.mode = mode || 'basic'; };
+        window.setWireframeMode = (enabled) => { sceneState.wireframe = Boolean(enabled); };
+        window.setAutoRotate = (enabled) => { sceneState.autoRotate = Boolean(enabled); };
+        window.resetThreeCamera = () => { yaw = 0.55; pitch = 0.35; zoom = 1.0; };
+        window.setOpticMode = (opticName) => applyOpticCss(canvas, opticName);
+        window.setTheaterTarget = (lat, lon, name) => {
+          sceneState.lat = Number(lat) || 0;
+          sceneState.lon = Number(lon) || 0;
+          sceneState.theaterName = name || '3D SCENE';
+        };
+
+        function project(x, y, z) {
+          const cy = Math.cos(yaw), sy = Math.sin(yaw);
+          const cp = Math.cos(pitch), sp = Math.sin(pitch);
+          const x1 = x * cy - z * sy;
+          const z1 = x * sy + z * cy;
+          const y2 = y * cp - z1 * sp;
+          const z2 = y * sp + z1 * cp + 6.0;
+          const s = (Math.min(canvas.width, canvas.height) * 0.72 * zoom) / Math.max(1.2, z2);
+          return [canvas.width * 0.5 + x1 * s, canvas.height * 0.5 - y2 * s];
+        }
+
+        function drawSeg(a, b, color, w) {
+          const p0 = project(a[0], a[1], a[2]);
+          const p1 = project(b[0], b[1], b[2]);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = w || 2;
+          ctx.beginPath(); ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.stroke();
+        }
+
+        let lastT = performance.now();
+        let fCount = 0;
+        let fAccum = 0;
+
+        function renderFallback(t) {
+          const dt = Math.min((t - lastT) / 1000, 0.05);
+          lastT = t;
+          fCount++;
+          fAccum += dt;
+          if (fAccum >= 0.8) {
+            reportFps(fCount / fAccum);
+            fCount = 0;
+            fAccum = 0;
+          }
+
+          ctx.fillStyle = '#04070D';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          if (sceneState.autoRotate && !dragging) yaw += 0.011;
+
+          for (let g = -3; g <= 3; g++) {
+            drawSeg([g, -1.2, -3], [g, -1.2, 3], 'rgba(0,229,255,0.20)', 1.2);
+            drawSeg([-3, -1.2, g], [3, -1.2, g], 'rgba(0,229,255,0.20)', 1.2);
+          }
+
+          if (sceneState.mode === 'basic') {
+            const s = 0.85;
+            const v = [
+              [-s, -s, -s], [s, -s, -s], [s, s, -s], [-s, s, -s],
+              [-s, -s, s], [s, -s, s], [s, s, s], [-s, s, s]
+            ];
+            for (let i = 0; i < 4; i++) {
+              drawSeg(v[i], v[(i + 1) % 4], '#00E5FF', 2.8);
+              drawSeg(v[i + 4], v[((i + 1) % 4) + 4], '#00FF9C', 2.8);
+              drawSeg(v[i], v[i + 4], '#FFB300', 2.2);
+            }
+          } else if (sceneState.mode === 'sat') {
+            drawSeg([-2.4, 0, 0], [2.4, 0, 0], '#00E5FF', 3);
+            for (const s of [-1, 1]) {
+              const bx = s * 0.9, ex = s * 2.3;
+              drawSeg([bx, 0, -0.45], [ex, 0, -0.45], '#4FC3F7', 2);
+              drawSeg([ex, 0, -0.45], [ex, 0, 0.45], '#4FC3F7', 2);
+              drawSeg([ex, 0, 0.45], [bx, 0, 0.45], '#4FC3F7', 2);
+              drawSeg([bx, 0, 0.45], [bx, 0, -0.45], '#4FC3F7', 2);
+            }
+          } else if (sceneState.mode === 'jet') {
+            const pts = [[0, 0.1, 1.8], [1.6, 0, -1.0], [0.3, 0, -1.3], [-0.3, 0, -1.3], [-1.6, 0, -1.0]];
+            for (let i = 0; i < pts.length; i++) drawSeg(pts[i], pts[(i + 1) % pts.length], '#00E5FF', 2.6);
+          } else {
+            for (let lat = -60; lat <= 60; lat += 30) {
+              const r = Math.cos(lat * Math.PI / 180) * 1.35, y = Math.sin(lat * Math.PI / 180) * 1.35;
+              for (let a = 0; a < 24; a++) {
+                const t0 = a * Math.PI / 12, t1 = (a + 1) * Math.PI / 12;
+                drawSeg([Math.cos(t0) * r, y, Math.sin(t0) * r], [Math.cos(t1) * r, y, Math.sin(t1) * r], 'rgba(0,229,255,0.55)', 1.6);
+              }
+            }
+          }
+          requestAnimationFrame(renderFallback);
+        }
+        requestAnimationFrame(renderFallback);
+        reportReady('3D CANVAS ENGINE', 'Software Wireframe');
+      }
+
+      loadScriptSequential(
+        [
+          'https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js',
+          'https://unpkg.com/three@0.146.0/build/three.min.js'
+        ],
+        (loaded) => {
+          if (loaded) {
+            try {
+              const ok = initThreeJsScene();
+              if (!ok) initSoftware3DFallback();
+            } catch (err) {
+              reportError(err && err.message ? err.message : 'Three.js init error');
+              initSoftware3DFallback();
+            }
+          } else {
+            initSoftware3DFallback();
+          }
+        }
+      );
+    })();
+  </script>
+</body>
+</html>

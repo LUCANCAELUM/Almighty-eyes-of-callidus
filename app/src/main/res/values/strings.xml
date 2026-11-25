@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Callidus</string>
+    <string name="app_full_title">THE ALMIGHTY EYES OF CALLIDUS</string>
+    <string name="subtitle_orbital_console">ORBITAL SPATIAL INTELLIGENCE</string>
+    <string name="action_layers">Layers</string>
+    <string name="action_theaters">Theaters</string>
+    <string name="action_optics">Optics</string>
+    <string name="action_chase_cam">3D Chase Cam</string>
+    <string name="action_exit_chase">Return to Orbit</string>
+    <string name="action_refresh">Sync Telemetry</string>
+    <string name="action_bookmark">Pin Target</string>
+    <string name="action_close">Close</string>
+</resources>

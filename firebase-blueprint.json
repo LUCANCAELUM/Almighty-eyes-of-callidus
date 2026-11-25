@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated Callidus operator profile and active tactical optic preference.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "opticMode": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "opticMode", "createdAt", "updatedAt"]
+    },
+    "SavedBookmark": {
+      "title": "SavedBookmark",
+      "description": "User-pinned geospatial target or strategic coordinate bookmark.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetKey": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "lat": { "type": "number" },
+        "lon": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "targetType", "targetKey", "title", "subtitle", "lat", "lon", "createdAt", "updatedAt"]
+    },
+    "DonationRecord": {
+      "title": "DonationRecord",
+      "description": "User donation pledge record for M-Pesa Paybill 522522 Account 1355643775.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "paybill": { "type": "string" },
+        "accountNumber": { "type": "string" },
+        "amountKes": { "type": "integer" },
+        "donorPhone": { "type": "string" },
+        "referenceCode": { "type": "string" },
+        "status": { "type": "string", "enum": ["RECORDED", "CONFIRMED"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "paybill", "accountNumber", "amountKes", "donorPhone", "referenceCode", "status", "createdAt", "updatedAt"]
+    },
+    "IntelChatMessage": {
+      "title": "IntelChatMessage",
+      "description": "Multi-turn Gemini tactical intelligence chat turn linked to target coordinates.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "model"] },
+        "content": { "type": "string" },
+        "modelId": { "type": "string" },
+        "targetLat": { "type": "number" },
+        "targetLon": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "role", "content", "modelId", "targetLat", "targetLon", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authenticated operator profile document."
+    },
+    "/users/{userId}/bookmarks/{bookmarkId}": {
+      "schema": { "$ref": "#/entities/SavedBookmark" },
+      "description": "User-pinned geospatial target bookmarks."
+    },
+    "/users/{userId}/donations/{donationId}": {
+      "schema": { "$ref": "#/entities/DonationRecord" },
+      "description": "User donation pledges to Paybill 522522 Account 1355643775."
+    },
+    "/users/{userId}/intel_messages/{messageId}": {
+      "schema": { "$ref": "#/entities/IntelChatMessage" },
+      "description": "User multi-turn Gemini tactical chatbot history."
+    }
+  }
+}

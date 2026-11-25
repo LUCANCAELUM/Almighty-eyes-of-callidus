@@ -1,0 +1,6 @@
+{
+  "name": "Callidus",
+  "description": "The Almighty Eyes of Callidus — 3D spatial intelligence and live global telemetry command console with real-time aircraft ADS-B, orbital satellites, seismic tremors, active natural events, and 3D cockpit chase-cam transitions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Callidus Panoptic 3D Satellite & Buildings</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #map {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #03070f;
+      font-family: 'Roboto Mono', monospace, sans-serif;
+    }
+    #map.optic-FLIR_THERMAL { filter: contrast(1.38) saturate(1.85) hue-rotate(-32deg); }
+    #map.optic-NVG_PHOSPHOR { filter: contrast(1.25) sepia(1) hue-rotate(68deg) saturate(2.35) brightness(0.95); }
+    #map.optic-CRT_MONITOR { filter: contrast(1.22) hue-rotate(155deg) saturate(1.5); }
+    #map.optic-NOIR_SURVEILLANCE { filter: grayscale(1) contrast(1.48); }
+    #map.optic-ARCTIC_SNOW { filter: contrast(1.1) brightness(1.18) saturate(0.72); }
+    #map.optic-WIREFRAME_HOLO { filter: contrast(1.32) hue-rotate(175deg) saturate(1.85) brightness(0.86); }
+    #map.optic-SOLAR_TERMINATOR { filter: contrast(1.16) saturate(1.22); }
+    #hud-badge {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      padding: 5px 10px;
+      border-radius: 6px;
+      background: rgba(5, 11, 22, 0.84);
+      border: 1px solid rgba(0, 229, 255, 0.55);
+      color: #00e5ff;
+      font-size: 10px;
+      pointer-events: none;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+    .callidus-marker {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 9px;
+      font-weight: 700;
+      color: #eaf6ff;
+      background: rgba(4, 9, 18, 0.88);
+      border: 1px solid currentColor;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.75);
+      pointer-events: none;
+    }
+    .amenity-marker {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #ffffff;
+      background: rgba(6, 13, 26, 0.92);
+      border: 1.4px solid currentColor;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.8);
+      cursor: pointer;
+      white-space: nowrap;
+      max-width: 150px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .amenity-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .reticle-corner {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      pointer-events: none;
+      z-index: 9;
+      border-color: rgba(0, 229, 255, 0.55);
+      border-style: solid;
+    }
+    .rc-tl { top: 8px; left: 8px; border-width: 2px 0 0 2px; }
+    .rc-tr { top: 8px; right: 8px; border-width: 2px 2px 0 0; }
+    .rc-bl { bottom: 8px; left: 8px; border-width: 0 0 2px 2px; }
+    .rc-br { bottom: 8px; right: 8px; border-width: 0 2px 2px 0; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="reticle-corner rc-tl"></div>
+  <div class="reticle-corner rc-tr"></div>
+  <div class="reticle-corner rc-bl"></div>
+  <div class="reticle-corner rc-br"></div>
+  <div id="hud-badge">GODS-EYE PANOPTIC SAT + 3D BUILDINGS</div>
+  <script>
+    const map = new maplibregl.Map({
+      container: 'map',
+      center: [-0.0754, 51.5055],
+      zoom: 16.0,
+      minZoom: 1.5,
+      maxZoom: 20.5,
+      pitch: 58,
+      bearing: -18,
+      antialias: true,
+      maxPitch: 78,
+      style: {
+        version: 8,
+        sources: {
+          'esri-sat': {
+            type: 'raster',
+            tiles: [
+              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+            ],
+            tileSize: 256,
+            maxzoom: 19
+          },
+          'esri-labels': {
+            type: 'raster',
+            tiles: [
+              'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
+            ],
+            tileSize: 256,
+            maxzoom: 19
+          },
+          'openfreemap': {
+            type: 'vector',
+            url: 'https://tiles.openfreemap.org/planet'
+          }
+        },
+        layers: [
+          {
+            id: 'satellite-base',
+            type: 'raster',
+            source: 'esri-sat',
+            minzoom: 0,
+            maxzoom: 22
+          },
+          {
+            id: 'osm-streets',
+            type: 'line',
+            source: 'openfreemap',
+            'source-layer': 'transportation',
+            minzoom: 11,
+            paint: {
+              'line-color': 'rgba(0, 229, 255, 0.42)',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.7, 17, 3.6]
+            }
+          },
+          {
+            id: 'osm-3d-buildings',
+            type: 'fill-extrusion',
+            source: 'openfreemap',
+            'source-layer': 'building',
+            minzoom: 13.0,
+            paint: {
+              'fill-extrusion-color': [
+                'interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 12],
+                0, 'rgba(26, 48, 72, 0.72)',
+                35, 'rgba(54, 102, 145, 0.76)',
+                100, 'rgba(84, 158, 206, 0.82)',
+                220, 'rgba(0, 229, 255, 0.85)'
+              ],
+              'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 14],
+              'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+              'fill-extrusion-opacity': 0.78,
+              'fill-extrusion-vertical-gradient': true
+            }
+          },
+          {
+            id: 'satellite-labels',
+            type: 'raster',
+            source: 'esri-labels',
+            minzoom: 2,
+            maxzoom: 22,
+            paint: { 'raster-opacity': 0.88 }
+          }
+        ]
+      }
+    });
+
+    let routeSourceReady = false;
+    let pendingRoute = null;
+    let activeMarkers = [];
+    let amenityMarkers = [];
+    let focusMarker = null;
+
+    map.on('load', () => {
+      map.setLight({
+        anchor: 'viewport',
+        color: '#dff4ff',
+        intensity: 0.48,
+        position: [1.35, 195, 55]
+      });
+
+      map.addSource('nav-route', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+      map.addLayer({
+        id: 'nav-route-glow',
+        type: 'line',
+        source: 'nav-route',
+        paint: {
+          'line-color': '#00ff9c',
+          'line-width': 11,
+          'line-opacity': 0.36
+        }
+      });
+      map.addLayer({
+        id: 'nav-route-line',
+        type: 'line',
+        source: 'nav-route',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#00e5ff',
+          'line-width': 4.5,
+          'line-opacity': 0.96
+        }
+      });
+      routeSourceReady = true;
+      if (pendingRoute) {
+        window.setRouteGeoJson(pendingRoute);
+        pendingRoute = null;
+      }
+    });
+
+    map.on('moveend', () => {
+      const c = map.getCenter();
+      const badge = document.getElementById('hud-badge');
+      badge.innerText = `PANOPTIC SAT 3D • ${c.lat.toFixed(4)}°, ${c.lng.toFixed(4)}° • Z${map.getZoom().toFixed(1)} • P${Math.round(map.getPitch())}°`;
+      try {
+        if (window.CallidusMapBridge && window.CallidusMapBridge.onMapMoved) {
+          window.CallidusMapBridge.onMapMoved(c.lat, c.lng, map.getZoom());
+        }
+      } catch (e) {}
+    });
+
+    window.flyToLocation3D = function(lat, lon, zoom, pitch, bearing) {
+      map.flyTo({
+        center: [lon, lat],
+        zoom: zoom || 16.0,
+        pitch: pitch !== undefined ? pitch : 58,
+        bearing: bearing !== undefined ? bearing : -18,
+        duration: 1200,
+        essential: true
+      });
+    };
+
+    window.setMapZoomExact = function(targetZoom) {
+      map.easeTo({ zoom: targetZoom, duration: 550 });
+    };
+
+    window.adjustMapZoom = function(delta) {
+      map.easeTo({ zoom: map.getZoom() + delta, duration: 350 });
+    };
+
+    window.togglePitch3D = function() {
+      const target = map.getPitch() > 25 ? 0 : 60;
+      map.easeTo({ pitch: target, duration: 550 });
+    };
+
+    window.toggleLabels = function(show) {
+      if (map.getLayer('satellite-labels')) {
+        map.setLayoutProperty('satellite-labels', 'visibility', show ? 'visible' : 'none');
+      }
+    };
+
+    window.setOpticMode = function(modeName) {
+      const el = document.getElementById('map');
+      el.className = 'optic-' + (modeName || 'EO_TACTICAL');
+      if (map.getLayer('osm-3d-buildings')) {
+        const wireframe = modeName === 'WIREFRAME_HOLO' || modeName === 'CRT_MONITOR';
+        map.setPaintProperty('osm-3d-buildings', 'fill-extrusion-opacity', wireframe ? 0.52 : 0.80);
+      }
+    };
+
+    window.setRouteGeoJson = function(geojsonStr) {
+      if (!routeSourceReady) {
+        pendingRoute = geojsonStr;
+        return;
+      }
+      try {
+        const data = typeof geojsonStr === 'string' ? JSON.parse(geojsonStr) : geojsonStr;
+        map.getSource('nav-route').setData(data);
+      } catch (e) {}
+    };
+
+    window.updateLiveEntities = function(itemsJson) {
+      try {
+        activeMarkers.forEach(m => m.remove());
+        activeMarkers = [];
+        const items = typeof itemsJson === 'string' ? JSON.parse(itemsJson) : itemsJson;
+        items.forEach(item => {
+          const el = document.createElement('div');
+          el.className = 'callidus-marker';
+          el.style.color = item.color || '#00e5ff';
+          el.innerText = item.label || '';
+          if (item.type === 'cctv' && item.id) {
+            el.style.pointerEvents = 'auto';
+            el.style.cursor = 'pointer';
+            el.style.borderWidth = '1.5px';
+            el.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              try {
+                if (window.CallidusMapBridge && window.CallidusMapBridge.onCctvSelected) {
+                  window.CallidusMapBridge.onCctvSelected(item.id);
+                }
+              } catch (e) {}
+            });
+          }
+          const marker = new maplibregl.Marker({ element: el })
+            .setLngLat([item.lon, item.lat])
+            .addTo(map);
+          activeMarkers.push(marker);
+        });
+      } catch (e) {}
+    };
+
+    window.updateAmenityMarkers = function(amenitiesJson) {
+      try {
+        amenityMarkers.forEach(m => m.remove());
+        amenityMarkers = [];
+        const items = typeof amenitiesJson === 'string' ? JSON.parse(amenitiesJson) : amenitiesJson;
+        items.forEach(item => {
+          const el = document.createElement('div');
+          el.className = 'amenity-marker';
+          el.style.color = item.color || '#00e5ff';
+          const dot = document.createElement('span');
+          dot.className = 'amenity-dot';
+          dot.style.backgroundColor = item.color || '#00e5ff';
+          el.appendChild(dot);
+          const lbl = document.createElement('span');
+          lbl.innerText = item.name || item.subType || 'AMENITY';
+          el.appendChild(lbl);
+          el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            try {
+              if (window.CallidusMapBridge && window.CallidusMapBridge.onAmenitySelected) {
+                window.CallidusMapBridge.onAmenitySelected(item.id);
+              }
+            } catch (e) {}
+          });
+          const marker = new maplibregl.Marker({ element: el })
+            .setLngLat([item.lon, item.lat])
+            .addTo(map);
+          amenityMarkers.push(marker);
+        });
+      } catch (e) {}
+    };
+
+    window.highlightAmenity = function(lat, lon, label) {
+      if (focusMarker) focusMarker.remove();
+      const el = document.createElement('div');
+      el.className = 'amenity-marker';
+      el.style.color = '#00ff9c';
+      el.style.borderWidth = '2px';
+      el.innerText = '◎ ' + (label || 'TARGET');
+      focusMarker = new maplibregl.Marker({ element: el })
+        .setLngLat([lon, lat])
+        .addTo(map);
+      map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 17.2), pitch: 62, duration: 950 });
+    };
+  </script>
+</body>
+</html>
